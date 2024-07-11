@@ -4,6 +4,13 @@ from filetranslate.service_fn import read_csv_list, write_csv_list
 from filetranslate.language_fn import is_in_language
 
 GLOBAL_NAMES = []
+MZ_MODE = not os.path.isdir(".\\www")
+MZ_PLUGIN_DATA = {
+#   "Plugin name": {"Command name": "Argument name with text to be replaced"}
+    "TextPicture": {"set" : "text" },
+    "DestinationWindow": { "SET_DESTINATION": "destination" },
+    "TorigoyaMZ_NotifyMessage": { "notify": "message", "notifyWithVariableIcon": "message" }
+}
 
 def extract_quoted_strings(script_text):
     matches = re.findall(r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'', script_text)
@@ -16,30 +23,15 @@ def parse_codes(page, name, no_rare_codes, stop_words):
     attributes = {}
     if 'list' in page:
         for command in page['list']:
+            global_name = ''
             code = command['code']
             parameters = command['parameters']
             # Show Text
             if code == 101:
                 name = parameters[0]
-                global_name = GLOBAL_NAMES[parameters[1]] if parameters[1] < len(GLOBAL_NAMES) else name
+                if GLOBAL_NAMES:
+                    global_name = GLOBAL_NAMES[parameters[1]] if parameters[1] < len(GLOBAL_NAMES) else name
                 pass
-            # Text data
-            if code == 401:
-                if parameters[0]:
-                    # we can do f"{global_name}/{name}" for precision too
-                    text_entries.append([parameters[0], '', global_name])
-            # Script code
-            elif code == 355:
-                if any(w in parameters[0] for w in stop_words):
-                    continue
-                scripts = extract_quoted_strings(parameters[0])
-                for script in scripts:
-                    if script:
-                        attributes[script] = ''
-            # Comments and Extended Comments
-            elif code in [108, 408]:
-                if parameters[0]:
-                    attributes[parameters[0]] = ''
             # Show Choices
             elif code == 102:
                 for choice in parameters[0]:
@@ -47,10 +39,44 @@ def parse_codes(page, name, no_rare_codes, stop_words):
                         attributes[choice] = ''
             # Control Variables
             elif code == 122:
+                if no_rare_codes: continue
                 if parameters[3] == 4:  # Script
                     script_variable = extract_quoted_strings(parameters[4])
                     if script_variable:
                         attributes[script_variable] = ''
+            # Text data
+            if code in (401, 405):
+                if parameters[0]:
+                    # we can do f"{global_name}/{name}" for precision too
+                    text_entries.append([parameters[0], '', global_name])
+            # Script code
+            elif code == 355:
+                if no_rare_codes: continue
+                if any(w in parameters[0] for w in stop_words):
+                    continue
+                scripts = extract_quoted_strings(parameters[0])
+                for script in scripts:
+                    if script:
+                        attributes[script] = ''
+            # Plugin call
+            elif code == 356:
+                if any(w in parameters[0] for w in stop_words):
+                    continue
+                splitParams = parameters[0].split(' ')
+                    if len(splitParams) > 1 and splitParams[1]:
+                        attributes[splitParams[1]] = ''
+            # Plugin call MZ
+            elif code == 357:
+                if any(w in parameters[0] for w in stop_words) or len(parameters) < 4:
+                    continue
+                for k, v in MZ_PLUGIN_DATA.items():
+                    if k == parameters[0] and parameters[1] in v:
+                        commandKey = v[parameters[1]]
+                        attributes[parameters[3][commandKey]] = ''
+            # Comments and Extended Comments
+            elif code in (108, 408):
+                if parameters[0]:
+                    attributes[parameters[0]] = ''
     return text_entries, attributes
 
 def parse_pages(event, no_rare_codes, stop_words):
@@ -157,7 +183,8 @@ def create_csv_files(input_folder, output_folder, no_rare_codes, stop_words):
 
             # Determine the type of data and extract relevant information
             if "Armors" in file_path or "Items" in file_path or "Weapons" in file_path or \
-            "Classes" in file_path or "Skills" in file_path or "Enemies" in file_path or "States" in file_path:                # Basic database objects (Actors, Armors, etc.)
+            "Classes" in file_path or "Skills" in file_path or "Enemies" in file_path or "States" in file_path:
+                # Basic database objects (Actors, Armors, etc.)
                 attrs = parse_attributes(data, ['name', 'nickname', 'profile', 'note', 'description',
                                         'message1', 'message2', 'message3', 'message4'])
             elif "System" in file_path:
@@ -192,10 +219,10 @@ def create_csv_files(input_folder, output_folder, no_rare_codes, stop_words):
 
 def main():
     parser = argparse.ArgumentParser(description='Extract text and attributes for translation from RPG Maker MV data files.')
-    parser.add_argument('-i', '--input_folder', default='.\\www\\data', help='Folder containing RPG Maker MV JSON data files.')
-    parser.add_argument('-o', '--output_folder', default='.\\www\\data', help='Folder to save the translation CSV files.')
-    parser.add_argument('-r', '--no_rare_codes', action='store_true', help='Enalbe rarely used codes (pollutes text if not used).')
-    parser.add_argument('-s', '--stop_words', default='live2d', help='Comma separated list of excluded word seen in scripts.')
+    parser.add_argument('-i', '--input_folder', default=('.\\data' if MZ_MODE else '.\\www\\data'), help='Folder containing RPG Maker MV JSON data files.')
+    parser.add_argument('-o', '--output_folder', default=('.\\data' if MZ_MODE else '.\\www\\data'), help='Folder to save the translation CSV files.')
+    parser.add_argument('-r', '--no_rare_codes', action='store_true', help='Enable rarely used codes (pollutes text if not used).')
+    parser.add_argument('-s', '--stop_words', default='live2d', help='Comma separated list of exclusion words for text in scripts.')
 
     args = parser.parse_args()
 
